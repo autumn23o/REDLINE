@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'REDLINE-GitHub-Upload.zip'
+      - '.github/workflows/build-redline-ipa.yml'
   workflow_dispatch:
 
 permissions:
@@ -24,8 +25,13 @@ jobs:
           test -f REDLINE-GitHub-Upload.zip || { echo "::error::Upload REDLINE-GitHub-Upload.zip in the repository's root directory first"; exit 1; }
           mkdir -p redline-src
           unzip -q -o REDLINE-GitHub-Upload.zip -d redline-src
-          test -f redline-src/package.json
-          test -f redline-src/ios/Redline.xcodeproj/project.pbxproj
+          # Accept both the original Redline/ folder ZIP and the flat GitHub ZIP.
+          if [[ -f redline-src/Redline/package.json && ! -f redline-src/package.json ]]; then
+            cp -R redline-src/Redline/. redline-src/
+            rm -rf redline-src/Redline
+          fi
+          test -f redline-src/package.json || { echo '::error::package.json is missing from project archive'; exit 1; }
+          test -f redline-src/ios/Redline.xcodeproj/project.pbxproj || { echo '::error::Xcode project is missing'; exit 1; }
 
       - name: Configure Node.js
         uses: actions/setup-node@v4
