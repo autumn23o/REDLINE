@@ -1,0 +1,82 @@
+name: Build REDLINE IPA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'REDLINE-GitHub-Upload.zip'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 55
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Extract uploaded REDLINE project
+        shell: bash
+        run: |
+          test -f REDLINE-GitHub-Upload.zip || { echo "::error::Upload REDLINE-GitHub-Upload.zip in the repository's root directory first"; exit 1; }
+          mkdir -p redline-src
+          unzip -q -o REDLINE-GitHub-Upload.zip -d redline-src
+          test -f redline-src/package.json
+          test -f redline-src/ios/Redline.xcodeproj/project.pbxproj
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: redline-src/package-lock.json
+
+      - name: Install dependencies and run gameplay tests
+        working-directory: redline-src
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      - name: Compile unsigned iOS app
+        working-directory: redline-src
+        run: |
+          xcodebuild -project ios/Redline.xcodeproj \
+            -scheme Redline -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/device \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Package unsigned IPA
+        working-directory: redline-src
+        run: |
+          mkdir -p build/package/Payload
+          test -d build/device/Build/Products/Release-iphoneos/Redline.app
+          cp -R build/device/Build/Products/Release-iphoneos/Redline.app build/package/Payload/
+          (cd build/package && zip -q -r ../Redline-unsigned.ipa Payload)
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Redline-unsigned-IPA
+          path: redline-src/build/Redline-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Compile iOS Simulator app
+        working-directory: redline-src
+        run: |
+          xcodebuild -project ios/Redline.xcodeproj \
+            -scheme Redline -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/simulator \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Upload simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Redline-iOS-Simulator
+          path: redline-src/build/simulator/Build/Products/Debug-iphonesimulator/Redline.app
+          if-no-files-found: warn
