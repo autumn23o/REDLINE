@@ -1,0 +1,66 @@
+name: nxnative free Mac compatibility test
+on:
+  push:
+    branches: [nxnative-runner-test]
+    paths: [.github/workflows/nxnative-runner-test.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - name: System and free storage
+        run: |
+          sw_vers
+          uname -m
+          sysctl hw.memsize
+          df -h /
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --find metal || true
+      - name: Test Metal device and compute execution
+        run: |
+          cat > /tmp/metal-probe.swift <<'SWIFT'
+          import Foundation
+          import Metal
+          guard let device = MTLCreateSystemDefaultDevice() else {
+            print("FAIL: no Metal device; Galaxy shader capture cannot run here")
+            exit(2)
+          }
+          print("Metal device: \(device.name)")
+          print("Recommended working set: \(device.recommendedMaxWorkingSetSize)")
+          let source = """
+          #include <metal_stdlib>
+          using namespace metal;
+          kernel void probe(device uint *out [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+            out[tid] = 42;
+          }
+          """
+          do {
+            let library = try device.makeLibrary(source: source, options: nil)
+            let pipeline = try device.makeComputePipelineState(function: library.makeFunction(name: "probe")!)
+            let buffer = device.makeBuffer(length: 4, options: .storageModeShared)!
+            let command = device.makeCommandQueue()!.makeCommandBuffer()!
+            let encoder = command.makeComputeCommandEncoder()!
+            encoder.setComputePipelineState(pipeline)
+            encoder.setBuffer(buffer, offset: 0, index: 0)
+            encoder.dispatchThreads(MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+            encoder.endEncoding()
+            command.commit()
+            command.waitUntilCompleted()
+            guard command.status == .completed else {
+              print("FAIL: GPU execution: \(String(describing: command.error))")
+              exit(3)
+            }
+            let value = buffer.contents().load(as: UInt32.self)
+            print("GPU result: \(value)")
+            guard value == 42 else { exit(4) }
+            print("PASS: Metal shader compilation and GPU execution work")
+          } catch {
+            print("FAIL: Metal compilation: \(error)")
+            exit(5)
+          }
+          SWIFT
+          xcrun swift /tmp/metal-probe.swift
